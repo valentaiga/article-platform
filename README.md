@@ -19,7 +19,7 @@ sequenceDiagram
     participant API Gateway
     
     Customer ->>+API Gateway:HTTP request
-    API Gateway ->>-Authentication Service: HTTP response
+    API Gateway ->>-Customer: HTTP response
 ```
 ### Get article request
 ```mermaid
@@ -30,7 +30,7 @@ sequenceDiagram
     participant Article Service
     participant Notification Service
     
-    Customer ->>+API: GET article request
+    Customer ->>+API Gateway: GET article request
     API Gateway ->>+Authentication Service:JWT header
     Authentication Service ->>-API Gateway:Authentication result <br>(user data)
     API Gateway ->>+Article Service: Request query
