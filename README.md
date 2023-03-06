@@ -1,63 +1,129 @@
-# Redis PubSub
-Publish Subscribe Messaging In .NET with Redis Channels.  
-Traces with OpenTelemetry.
+# Article platform
+Article platform with SOA approach.
 
 ## Goals
-- [x] Build PubSub messaging under RedisMQ
-- [x] OpenTelemetry distributed traces 
-
-## Result
-Jaeger contains propagated span with both producer and consumer activities  
-![jaeger-span.png](docs/jaeger-span.png)
-![jaeger-span1.png](docs/jaeger-span1.png)
+- [x] Design the web application with SOA approach
+- [ ] OpenTelemetry distributed traces
+- [ ] Metrics
+- [ ] k8s deployment
+- [ ] Docker compose
 
 ## Environment setup
-1. Run a redis on localhost with docker:  
-`docker run -d -p 6379:6379 --name redis redis`
-2. Run a jaeger on localhost with docker:  
-`docker run -d --name jaeger \             
-   -e COLLECTOR_ZIPKIN_HOST_PORT=:9411 \
-   -e COLLECTOR_OTLP_ENABLED=true \
-   -p 6831:6831/udp \
-   -p 6832:6832/udp \
-   -p 5778:5778 \
-   -p 16686:16686 \
-   -p 4317:4317 \
-   -p 4318:4318 \
-   -p 14250:14250 \
-   -p 14268:14268 \
-   -p 14269:14269 \
-   -p 9411:9411 \
-   jaegertracing/all-in-one:latest`
-3. Traces are available on http://localhost:16686 endpoint
+TBD
 
-## Redis PubSub Theory
-Messages sent by other clients to these channels will be pushed by Redis to all the subscribed clients.  
+## Services design
+All requests go through API gateway
+```mermaid
+sequenceDiagram
+    participant Customer
+    participant API Gateway
+    
+    Customer ->>+API Gateway:HTTP request
+    API Gateway ->>-Authentication Service: HTTP response
+```
+### Get article request
+```mermaid
+sequenceDiagram
+    participant Customer
+    participant API Gateway
+    participant Authentication Service
+    participant Article Service
+    participant Notification Service
+    
+    Customer ->>+API: GET article request
+    API Gateway ->>+Authentication Service:JWT header
+    Authentication Service ->>-API Gateway:Authentication result <br>(user data)
+    API Gateway ->>+Article Service: Request query
+    Article Service ->>-API Gateway: Article data
+    API Gateway ->>+Notification Service: User ID
+    Notification Service ->>-API Gateway: Notifications
+    API Gateway ->>-Customer:Article response<br>(article, permissions, notifications)
+```
+### Create article
+```mermaid
+sequenceDiagram
+    participant Customer
+    participant API Gateway
+    participant Authentication Service
+    participant Article Service
+    participant Kafka
+    participant Notification Service
+    participant Search Service
+    
+    Customer ->>+API Gateway: Create article request
+    API Gateway ->>+Authentication Service: JWT header
+    Authentication Service ->>-API Gateway: Authentication result <br>(author data)
+    API Gateway ->>+Article Service: Article data (full)
+    Article Service ->>-API Gateway: Operation result <br>(success/validation fail/service failure)
+    %% API Gateway -->> Customer: Bad response <br>(validation/server error)
+    API Gateway ->>-Customer:Operation result response<br>(article data/validation error/server error)\
+    Article Service ->>Kafka: Article data message<br>(title, link, author)<br>Topic: new-article
+    Notification Service ->> Kafka: pull topic new-article
+    Kafka ->> Notification Service: pull topic new-article <br>Article data message
+    Search Service ->> Kafka: pull topic new-article
+    Kafka ->> Search Service: pull topic new-article <br>Article data message
+```
+### User sign in
+```mermaid
+sequenceDiagram
+    participant Customer
+    participant API Gateway
+    participant Authentication Service
+    
+    Customer ->>+API Gateway: Sign in request
+    API Gateway ->>+Authentication Service: user credentials
+    Authentication Service ->>-API Gateway: Authentication result <br>(success-JWT/fail)
+    API Gateway ->>-Customer:Operation result response<br>(success-JWT/bad creds/server error)
+```
 
-### Format of pushed messages
-A message is an [array-reply](https://redis.io/topics/protocol#array-reply) with three elements.  
+## Platform design
 
-The first element is the kind of message:
-- **`subscribe`**: means that we successfully subscribed to the channel given as the second element in the reply. The third argument represents the number of channels we are currently subscribed to.
-- **`unsubscribe`**: means that we successfully unsubscribed from the channel given as second element in the reply. The third argument represents the number of channels we are currently subscribed to. When the last argument is zero, we are no longer subscribed to any channel, and the client can issue any kind of Redis command as we are outside the Pub/Sub state.
-- **`message`**: it is a message received as result of a **`PUBLISH`** command issued by another client. The second element is the name of the originating channel, and the third argument is the actual message payload.
+### Step 1: Identify the services and their functionalities
 
-Pub/Sub has no relation to the key space. It was made to not interfere with it on any level, including database numbers.  
-That means: publishing on db 10, will be heard by a subscriber on db 1.  
+- [ ] **Authentication Service**: Handles user authentication and authorization
+- [ ] **Article Service**: Handles article creation, retrieval, and rating
+- [ ] **Notification Service**: Handles sending notifications to users about article updates  
+- [ ] **Search Service**: Handles article search functionality  
+- [ ] **Kafka Service**: Message broker for communication between services
 
-### Pattern-matching subscriptions
+### Step 2: Define the communication protocol between services
+We will use **grpc** for communication between services. This will allow us to define the service interface using Protocol Buffers and generate client and server stubs in multiple programming languages.  
+Each service will have its own set of grpc APIs that will define the service functionality.  
 
-The Redis Pub/Sub implementation supports pattern matching. Clients may subscribe to glob-style patterns in order to receive all the messages sent to channel names matching a given pattern.  
-**`PSUBSCRIBE news.*`**
+### Step 3: Define the Kafka topics for communication between services
+We will use **Apache Kafka** as the message broker to handle communication between services.  
+We will define topics for each service to publish and subscribe to.  
+For example, the Article Service will publish new article events to the "new-article" topic, and the Notification Service will subscribe to this topic to send notifications to users.  
 
-### Pros & Cons:
-- Real-time, low-latency, urgent messages
-  - If messages are short-lived and age rapidly, so therefore are only relevant to subscribers for a short time window
-- Unreliable delivery/lossy messaging
-  - If it doesn’t matter if some messages are simply discarded due to unreliable delivery
+### Step 4: Define the web application architecture
+We will create a web application that will interact with the services using grpc APIs.  
+The web application will have the following components:  
+Frontend: Handles user interaction and rendering (swagger)  
+Backend API: Handles communication with the services using grpc APIs  
+Authentication Service: Handles user authentication and authorization  
+Article Service: Handles article creation, retrieval, and rating  
 
-### When to use
-- A requirement for at-most-once delivery per subscriber
-  - i.e. subscribers are not capable of detecting duplicate messages and target systems are not idempotent
-- If subscribers have short-lived, evolving, or dynamic interest in channels, and only want to receive messages from specific channels for finite periods of time 
-  - e.g. mobile IoT devices may only be intermittently connected, and only interested and able to respond to current messages at their location
+### Step 5: Define the communication between the web application and services
+The web application will use grpc APIs to communicate with the Authentication and Article Services.  
+Authentication Service will handle user authentication and authorization, and the Article Service will handle article creation, retrieval, and rating.  
+The web application will use a reverse proxy to handle communication between the frontend and backend API.
+
+### Step 6: Implement the services and web application
+Each service will be implemented as a separate grpc server in its own container.  
+The web application will be implemented as a set of containers, including the frontend, backend API, and reverse proxy.  
+All services and the Kafka broker will be deployed in a Kubernetes cluster.  
+
+### Step 7: Add picture printing feature   
+We can add a picture printing feature by integrating a printing service into the system.  
+The printing service can be implemented as another grpc server and added to the Kubernetes cluster.  
+The web application can then use grpc APIs to communicate with the printing service to print pictures.  
+
+### Step 8: Add tracing and metrics for required services
+Observability allows us to easily troubleshoot and handle novel problems (i.e. “unknown unknowns”), and helps us answer the question, "Why is this happening?"  
+The application code must emit signals such as traces, metrics, and logs. An application is properly instrumented when developers don’t need to add more instrumentation to troubleshoot an issue, because they have all of the information they need.
+
+### Step 9: Build a kubernetes deployment
+Kubernetes automates operational tasks of container management and includes built-in commands for deploying applications, rolling out changes to your applications, scaling your applications up and down to fit changing needs, monitoring your applications, and more—making it easier to manage applications.  
+Kubernetes can help you streamline your application deployment and management process, while also improving its scalability, availability, and efficiency.
+
+
